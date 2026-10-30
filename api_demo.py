@@ -47,7 +47,8 @@ with tempfile.TemporaryDirectory() as tmp:
     denied = client.post(path, json={"approve_missing": False}, headers=operator)
     print("APPLY without approval ->", denied.status_code, denied.json())
     print("E9 active before approval ->", bool(client.get("/v1/employees/E9", headers=operator).json()["active"]))
-    applied = client.post(path, json={"approve_missing": True}, headers=operator)
+    applied = client.post(path, json={"approve_missing": True,
+                                     "reason": "HR confirmed planned export reduction"}, headers=operator)
     print("APPLY with approval ->", applied.status_code, {k: applied.json()[k] for k in ("status", "applied", "invalid")})
     print("E9 active after approval ->", bool(client.get("/v1/employees/E9", headers=operator).json()["active"]))
     print("Approval actor ->", client.get(f"/v1/runs/{run['run_id']}", headers=operator).json()["approved_by"])

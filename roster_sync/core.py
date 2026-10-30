@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS sync_runs (
  status TEXT NOT NULL, total INTEGER NOT NULL DEFAULT 0,
  invalid INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0,
  applied INTEGER NOT NULL DEFAULT 0, started_at REAL NOT NULL,
- approved_by TEXT, applied_at REAL);
+ approved_by TEXT, approval_reason TEXT, applied_at REAL);
 CREATE TABLE IF NOT EXISTS tenant_watermarks (
  tenant_id TEXT PRIMARY KEY, snapshot_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshot_rows (
@@ -113,6 +113,10 @@ class RosterStore:
         self._office_cache_lock = threading.Lock()
         with connect(self.path) as db:
             db.executescript(SCHEMA)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(sync_runs)")}
+            for column, definition in (("approved_by", "TEXT"), ("approval_reason", "TEXT"), ("applied_at", "REAL")):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE sync_runs ADD COLUMN {column} {definition}")
 
     def add_office(self, tenant: str, office: str) -> None:
         with connect(self.path) as db:
@@ -240,6 +244,12 @@ class RosterStore:
             row = db.execute("SELECT * FROM employees WHERE tenant_id=? AND employee_id=?", (tenant, employee)).fetchone()
             return dict(row) if row else None
 
+    def employees(self, tenant: str, limit: int = 50) -> list[dict]:
+        with connect(self.path) as db:
+            return [dict(row) for row in db.execute(
+                "SELECT employee_id,name,office_code,shift,active,source_version "
+                "FROM employees WHERE tenant_id=? ORDER BY employee_id LIMIT ?", (tenant, min(limit, 100)))]
+
     def begin_snapshot(self, tenant: str, snapshot_version: int, rows: Iterable[dict]) -> SyncResult:
         run_id = str(uuid.uuid4())
         total = invalid = 0
@@ -275,7 +285,8 @@ class RosterStore:
             db.commit()
         return SyncResult(run_id, status, total, invalid, missing, 0)
 
-    def apply_snapshot(self, tenant: str, run_id: str, approved: bool = False, approved_by: str | None = None) -> SyncResult:
+    def apply_snapshot(self, tenant: str, run_id: str, approved: bool = False,
+                       approved_by: str | None = None, approval_reason: str | None = None) -> SyncResult:
         with connect(self.path) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -289,6 +300,8 @@ class RosterStore:
                     raise RosterError("STALE_SNAPSHOT", 409)
                 if run["status"] == "HELD" and not approved:
                     raise RosterError("APPROVAL_REQUIRED", 409)
+                if run["status"] == "HELD" and (not approval_reason or len(approval_reason.strip()) < 8):
+                    raise RosterError("APPROVAL_REASON_REQUIRED", 400)
                 applied = 0
                 apply_invalid = 0
                 for row in db.execute("SELECT employee_id,row_number,payload FROM snapshot_rows WHERE run_id=? ORDER BY employee_id", (run_id,)):
@@ -314,8 +327,9 @@ class RosterStore:
                         if self._apply(db, tenant, {"employee_id": row[0], "type": "DEACTIVATE", "source_version": run["snapshot_version"]}) == "APPLIED":
                             applied += 1
                 invalid_total = run["invalid"] + apply_invalid
-                db.execute("UPDATE sync_runs SET status='APPLIED',applied=?,invalid=?,approved_by=?,applied_at=? WHERE id=?",
-                           (applied, invalid_total, approved_by if approved else None, time.time(), run_id))
+                db.execute("UPDATE sync_runs SET status='APPLIED',applied=?,invalid=?,approved_by=?,approval_reason=?,applied_at=? WHERE id=?",
+                           (applied, invalid_total, approved_by if approved else None,
+                            approval_reason.strip() if approved and approval_reason else None, time.time(), run_id))
                 db.execute("INSERT INTO tenant_watermarks VALUES (?,?) ON CONFLICT(tenant_id) DO UPDATE SET snapshot_version=excluded.snapshot_version",
                            (tenant, run["snapshot_version"]))
                 db.execute("DELETE FROM snapshot_rows WHERE run_id=?", (run_id,))
@@ -339,7 +353,7 @@ class RosterStore:
 
     def run(self, tenant: str, run_id: str) -> dict:
         with connect(self.path) as db:
-            row = db.execute("SELECT id,snapshot_version,status,total,invalid,missing,applied,approved_by,applied_at FROM sync_runs WHERE id=? AND tenant_id=?",
+            row = db.execute("SELECT id,snapshot_version,status,total,invalid,missing,applied,approved_by,approval_reason,applied_at FROM sync_runs WHERE id=? AND tenant_id=?",
                              (run_id, tenant)).fetchone()
             if not row:
                 raise RosterError("UNKNOWN_RUN", 404)

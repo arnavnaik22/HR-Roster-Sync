@@ -71,10 +71,14 @@ class RosterTests(unittest.TestCase):
         self.assertEqual((run.status, run.missing), ("HELD", 4))
         with self.assertRaisesRegex(RosterError, "APPROVAL_REQUIRED"):
             self.store.apply_snapshot("T1", run.run_id)
+        with self.assertRaisesRegex(RosterError, "APPROVAL_REASON_REQUIRED"):
+            self.store.apply_snapshot("T1", run.run_id, approved=True, approved_by="operator-123")
         self.assertEqual(self.store.employee("T1", "E9")["active"], 1)
-        self.assertEqual(self.store.apply_snapshot("T1", run.run_id, approved=True).status, "APPLIED")
+        self.assertEqual(self.store.apply_snapshot("T1", run.run_id, approved=True,
+                                                   approved_by="operator-123", approval_reason="HR confirmed planned export reduction").status, "APPLIED")
         self.assertEqual(self.store.employee("T1", "E9")["active"], 0)
         self.assertEqual(self.store.apply_snapshot("T1", run.run_id, approved=True).applied, 4)
+        self.assertEqual(self.store.run("T1", run.run_id)["approval_reason"], "HR confirmed planned export reduction")
 
     def test_older_snapshot_cannot_undo_newer_source_data(self):
         self.store.apply_event("T1", event(version=1))

@@ -1,6 +1,8 @@
-# HR Roster Sync: idempotent, out-of-order, self-healing
+# Roster Desk · HR Roster Sync
 
-MoveInSync SDE case study 5. This repository implements an HR roster synchronization service with an event API, nightly CSV reconciliation, a mass-deactivation safety brake, tenant isolation, and a transactional outbox. It uses **Python 3.12, FastAPI, and SQLite**. Python is allowed by the assessment; the core stays in plain classes so its rules can be tested without an HTTP server.
+An HR export arrives with six names where there should be ten. Applying it blindly could cancel four people's future rides. Roster Desk shows the decision an operator should see: **pause the file, show who is missing, and record a reason before applying it**.
+
+This is a working implementation of MoveInSync SDE case study 5, built with **Python 3.12, FastAPI, and SQLite**. The backend also handles duplicate and late events, field ownership, tenant isolation, booking cancellation, and a transactional outbox. The web screen makes those rules easier to inspect; the core remains testable without a browser.
 
 ## Start here
 
@@ -10,7 +12,9 @@ The one-command application run is:
 docker compose up --build
 ```
 
-Open `http://localhost:8000/docs` for the generated API documentation. The Compose file supplies a **local-demo-only** signing secret and persists the SQLite database in a Docker volume. Set `ROSTER_SECRET` to a random value of at least 32 characters outside a local demo. Docker is not required for the unit tests if Python dependencies are installed.
+Open **`http://localhost:8000/`** and click **Open sample workspace**. Check the sample file, read the hold decision, enter an approval reason, and try the late update. The screen uses the same API as an external HR system; it creates a fresh tenant with synthetic records for each walkthrough. Generated API documentation is at `http://localhost:8000/docs`.
+
+Compose binds the app to **localhost** and enables sample mode. It supplies a **local-demo-only** signing secret and persists SQLite in a Docker volume. Sample mode issues short-lived tokens for its synthetic tenant; leave `ROSTER_DEMO_MODE=0` outside this local walkthrough. Set `ROSTER_SECRET` to a random value of at least 32 characters outside a local demo. Docker is not required for the unit tests if Python dependencies are installed.
 
 For a complete synthetic walkthrough:
 
@@ -24,7 +28,7 @@ python bench_api.py
 
 `api_demo.py` runs real FastAPI requests in process and shows duplicate and late events, a truncated export, explicit approval, and outbox retry. It uses synthetic identities only.
 
-The [one-minute demo video](assets/demo.mp4) presents output captured from actual API, test, and benchmark runs. The reproducible commands are in [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+The [one-minute illustrated walkthrough](assets/demo.mp4) tells the same story in plain language; the [quick tour](assets/quick-tour.mp4) is shorter. They use synthetic records and figures verified against real local API, test, and benchmark runs. The reproducible commands and live presentation order are in [DEMO_SCRIPT.md](DEMO_SCRIPT.md), and [INTERVIEW_GUIDE.md](INTERVIEW_GUIDE.md) has short, honest answers to likely follow-up questions.
 
 ## Why this design fits the problem
 
@@ -35,7 +39,7 @@ The [one-minute demo video](assets/demo.mp4) presents output captured from actua
 | Duplicate and out-of-order events | Per-employee source version and canonical source-state hash | `test_replay_stale_and_conflict`, concurrency test |
 | Field ownership | HR writes HR columns; transport-admin API writes pickup and assistance | `test_transport_fields_survive_hr_update` |
 | 200,000-row nightly diff | Indexed staging table and SQL anti-join; no full-file Python list | `bench.py` with 200,000 stored and 200,000 exported rows |
-| Suspicious export safety brake | Hold if at least 30% of eligible active employees are missing; operator approval recorded | `test_safety_brake_and_approval`, API walkthrough |
+| Suspicious export safety brake | Hold if at least 30% of eligible active employees are missing; operator ID and reason recorded | `test_safety_brake_and_approval`, guided web walkthrough |
 | Reliable downstream change events | Employee/bookings/outbox share one database transaction; retrying relay | `test_crash_rolls_back_employee_and_event`, API walkthrough |
 | Deactivation side effects | Cancel future confirmed bookings in the same transaction; emit change events | `test_deactivation_cancels_future_bookings` |
 | Authentication and tenant isolation | Signed expiring bearer tokens with tenant and role; all reads and writes tenant-scoped | `test_auth_roles_and_tenant_boundary` |
@@ -47,7 +51,7 @@ The [one-minute demo video](assets/demo.mp4) presents output captured from actua
 2. HR sends a versioned `CREATE`, `UPDATE`, or `DEACTIVATE` event to `POST /v1/events`.
 3. HR uploads a raw UTF-8 CSV to `POST /v1/snapshots?version=N`. The file is spooled to disk after 1 MiB; the maximum accepted upload is 50 MiB. The response contains a run ID, row counts, missing count, and `READY` or `HELD`.
 4. Operator reads `GET /v1/runs/{id}` and `GET /v1/runs/{id}/errors`.
-5. Operator calls `POST /v1/runs/{id}/apply` with `{"approve_missing":false}`. A held run returns `APPROVAL_REQUIRED`. To proceed after checking the source file, the operator sends `{"approve_missing":true}`. The token subject is saved as `approved_by`.
+5. Operator calls `POST /v1/runs/{id}/apply` with `{"approve_missing":false}`. A held run returns `APPROVAL_REQUIRED`. To proceed after checking the source file, the operator sends `{"approve_missing":true,"reason":"HR confirmed planned export reduction"}`. The operator ID and reason are saved with the run.
 6. The relay publishes outbox events to `ROSTER_EVENT_URL` using `Idempotency-Key`. Without a URL, demo events are printed without personal data.
 
 Generate demo tokens from the running container:
@@ -115,7 +119,7 @@ python bench_api.py
 python bench_events.py
 ```
 
-All **13 tests pass** locally. They cover a concurrent version race, process failure before transaction commit, relay failure and retry, invalid rows, same-version conflicts, tenant isolation, role checks, snapshot approval audit, field ownership, booking cancellation, and stale snapshot rejection. The actual Uvicorn process also passed a `/v1/health` request locally. `DESIGN.md` contains the architecture diagram, sequence diagram, failure-mode table, and trade-offs.
+All **14 tests pass** locally. They cover a concurrent version race, process failure before transaction commit, relay failure and retry, invalid rows, same-version conflicts, tenant isolation, role checks, snapshot approval audit, field ownership, booking cancellation, stale snapshot rejection, and the guided web demo. The actual Uvicorn process also passed a `/v1/health` request locally. `DESIGN.md` contains the architecture diagram, sequence diagram, failure-mode table, and trade-offs.
 
 GitHub Actions runs the tests, the API walkthrough, bytecode compilation, and a Docker Compose health check on each push. The workflow has not run until the first GitHub push.
 
@@ -127,6 +131,8 @@ Configuration:
 | `ROSTER_SECRET` | Compose demo value only | HMAC signing key; minimum 32 characters |
 | `ROSTER_EVENT_URL` | empty | HTTP event consumer; empty means safe demo logging |
 | `ROSTER_MISSING_THRESHOLD` | `0.30` | Missing active fraction that holds an export |
+| `ROSTER_DEMO_MODE` | `0` | Enable local sample sessions; Compose sets `1` |
+| `ROSTER_HOST` | `127.0.0.1` in demo mode | Listen address; Compose binds the published port to localhost |
 
 The `/v1/metrics` response is tenant-scoped: pending outbox count, oldest pending age, held run count, and total invalid rows. Production alert suggestions: outbox oldest age above 60 seconds, any held run awaiting review, and sustained invalid-row growth. Structured request logs contain method, status, and elapsed time, but not URL, request body, phone, email, or pickup location. The office-code cache stores only positive `(tenant, office)` keys, holds at most 4,096 entries, and expires after five seconds. There is no office-delete API; an out-of-band delete could be accepted from cache for at most five seconds.
 

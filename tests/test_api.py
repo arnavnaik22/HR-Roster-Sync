@@ -1,4 +1,6 @@
 import tempfile
+import csv
+import io
 import unittest
 from pathlib import Path
 
@@ -48,7 +50,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post(f"/v1/runs/{run['run_id']}/apply", json={"approve_missing": False},
                                           headers=self.auth()).status_code, 409)
         self.assertEqual(self.store.employee("T1", "E9")["active"], 1)
-        applied = self.client.post(f"/v1/runs/{run['run_id']}/apply", json={"approve_missing": True},
+        applied = self.client.post(f"/v1/runs/{run['run_id']}/apply", json={"approve_missing": True,
+                                                                           "reason": "HR confirmed planned export reduction"},
                                    headers=self.auth(subject="operator-123"))
         self.assertEqual(applied.status_code, 200)
         self.assertEqual(applied.json()["invalid"], 6)
@@ -56,6 +59,32 @@ class ApiTests(unittest.TestCase):
             f"/v1/runs/{run['run_id']}/errors", headers=self.auth()).json()}, {"VERSION_CONFLICT"})
         self.assertEqual(self.client.get(f"/v1/runs/{run['run_id']}", headers=self.auth()).json()["approved_by"], "operator-123")
         self.assertEqual(self.store.employee("T1", "E9")["active"], 0)
+
+    def test_guided_demo_uses_real_tenant_scoped_api(self):
+        demo = TestClient(create_app(self.store, "s" * 32, relay_enabled=False, demo_mode=True))
+        self.assertIn("Roster Desk", demo.get("/").text)
+        self.assertEqual(demo.get("/static/styles.css").status_code, 200)
+        session = demo.post("/demo/session").json()
+        self.assertEqual(len(session["records"]), 10)
+        operator = {"Authorization": "Bearer " + session["operator_token"]}
+        hr = {"Authorization": "Bearer " + session["hr_token"], "Content-Type": "text/csv"}
+        self.assertEqual(len(demo.get("/v1/employees", headers=operator).json()), 10)
+        stream = io.StringIO()
+        fields = ("employee_id", "name", "email", "phone", "manager", "office_code", "shift", "source_version")
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for record in session["records"][:6]:
+            writer.writerow({field: record[field] for field in fields})
+        run = demo.post("/v1/snapshots?version=10", content=stream.getvalue().encode(), headers=hr).json()
+        self.assertEqual((run["status"], run["missing"]), ("HELD", 4))
+        self.assertEqual(demo.post(f"/v1/runs/{run['run_id']}/apply", json={"approve_missing": True},
+                                   headers=operator).json()["error"], "APPROVAL_REASON_REQUIRED")
+        applied = demo.post(f"/v1/runs/{run['run_id']}/apply",
+                            json={"approve_missing": True, "reason": "HR confirmed these four exits"},
+                            headers=operator)
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(sum(person["active"] for person in demo.get("/v1/employees", headers=operator).json()), 6)
+        self.assertEqual(self.client.post("/demo/session").status_code, 404)
 
 
 if __name__ == "__main__":

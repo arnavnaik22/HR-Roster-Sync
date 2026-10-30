@@ -16,11 +16,14 @@ import tempfile
 import threading
 import time
 import urllib.request
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from .core import RosterError, RosterStore, connect
@@ -66,7 +69,7 @@ def publisher_for(url: str):
 
 
 def create_app(store: RosterStore, secret: str, event_url: str = "", relay_enabled: bool = True,
-               log_requests: bool = False) -> FastAPI:
+               log_requests: bool = False, demo_mode: bool = False) -> FastAPI:
     if len(secret) < 32:
         raise ValueError("ROSTER_SECRET must have at least 32 characters")
     stop = threading.Event()
@@ -96,6 +99,31 @@ def create_app(store: RosterStore, secret: str, event_url: str = "", relay_enabl
             thread.join(timeout=4)
 
     app = FastAPI(title="MoveInSync HR Roster Sync", version="1.0.0", lifespan=lifespan)
+    static_dir = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(static_dir / "index.html")
+
+    if demo_mode:
+        @app.post("/demo/session", include_in_schema=False)
+        def demo_session():
+            tenant = "demo-" + uuid.uuid4().hex[:12]
+            store.add_office(tenant, "BLR")
+            first_names = ("Asha", "Dev", "Maya", "Kabir", "Tara", "Rohan", "Ira", "Neil", "Anika", "Sam")
+            records = []
+            for index, name in enumerate(first_names, 1):
+                record = {"type": "CREATE", "employee_id": f"E{1000 + index}", "name": name,
+                          "email": f"rider{index}@example.invalid", "phone": "+919999999999",
+                          "manager": "M1", "office_code": "BLR",
+                          "shift": "18:00" if index > 5 else "09:00", "source_version": 1}
+                store.apply_event(tenant, record)
+                records.append(record)
+            return JSONResponse({"tenant": tenant, "records": records,
+                                 "operator_token": issue_token(secret, tenant, "operator", "demo-operator", 1800),
+                                 "hr_token": issue_token(secret, tenant, "hr", "demo-hr", 1800)},
+                                headers={"Cache-Control": "no-store"})
 
     if log_requests:
         @app.middleware("http")
@@ -173,7 +201,8 @@ def create_app(store: RosterStore, secret: str, event_url: str = "", relay_enabl
     @app.post("/v1/runs/{run_id}/apply")
     def apply_run(run_id: str, body: dict[str, Any], claims: dict = Depends(require("operator"))):
         approved = body.get("approve_missing") is True
-        result = store.apply_snapshot(claims["tenant"], run_id, approved, claims["sub"] if approved else None)
+        result = store.apply_snapshot(claims["tenant"], run_id, approved,
+                                      claims["sub"] if approved else None, body.get("reason"))
         return result.__dict__
 
     @app.get("/v1/employees/{employee_id}")
@@ -185,6 +214,10 @@ def create_app(store: RosterStore, secret: str, event_url: str = "", relay_enabl
         return {key: row[key] for key in (
             "employee_id", "name", "office_code", "shift", "active", "source_version",
             "pickup_point", "special_assistance")}
+
+    @app.get("/v1/employees")
+    def list_employees(claims: dict = Depends(require("hr", "admin", "operator"))):
+        return store.employees(claims["tenant"])
 
     @app.post("/v1/employees/{employee_id}/transport")
     def transport_fields(employee_id: str, body: dict[str, Any], claims: dict = Depends(require("admin", "operator"))):
@@ -207,6 +240,9 @@ def serve():
         raise SystemExit("Set ROSTER_SECRET to at least 32 characters")
     store = RosterStore(os.environ.get("ROSTER_DB", "roster.db"),
                         float(os.environ.get("ROSTER_MISSING_THRESHOLD", "0.30")))
-    app = create_app(store, secret, os.environ.get("ROSTER_EVENT_URL", ""), log_requests=True)
+    demo_mode = os.environ.get("ROSTER_DEMO_MODE", "0") == "1"
+    app = create_app(store, secret, os.environ.get("ROSTER_EVENT_URL", ""), log_requests=True,
+                     demo_mode=demo_mode)
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
+    host = os.environ.get("ROSTER_HOST", "127.0.0.1" if demo_mode else "0.0.0.0")
+    uvicorn.run(app, host=host, port=8000, access_log=False)

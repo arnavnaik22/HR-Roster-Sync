@@ -7,20 +7,20 @@ flowchart LR
   HR[HR event API / nightly CSV] --> API[FastAPI: tenant + role boundary]
   API --> SVC[RosterStore: version rules + ownership + safety brake]
   SVC --> DB[(SQLite demo database)]
-  DB --> STAGE[Snapshot staging + run status + approval actor]
+  DB --> STAGE[Snapshot staging + run status + approval audit]
   DB --> OUTBOX[Transactional outbox]
   OUTBOX --> RELAY[Retrying relay]
   RELAY --> DOWN[Configured HTTP consumer / demo log]
   OP[Operator] -->|approve held run| API
 ```
 
-The demo has one FastAPI process and one durable SQLite database. All business transitions are atomic within the database. A production deployment would replace SQLite with PostgreSQL and the HTTP relay with a broker publisher while retaining the same version and safety rules. The API layer handles authentication, tenant scoping, upload bounds, and safe responses; the core can run without a web server.
+The demo has one FastAPI process and one durable SQLite database. All business transitions are atomic within the database. The guided web screen uses the same API as an external caller and creates only synthetic records. A production deployment would replace SQLite with PostgreSQL and the HTTP relay with a broker publisher while retaining the same version and safety rules. The API layer handles authentication, tenant scoping, upload bounds, and safe responses; the core can run without a web server.
 
 ## Source ordering and reconciliation
 
 The source system supplies a monotonic version for each employee event and a watermark for each export. An event only applies when its version is greater than the stored version. Equal version and equal canonical HR-state hash means duplicate, even if the envelope says `CREATE`, `UPDATE`, or `UPSERT`; equal version with changed content means conflict. Deactivation via a missing export only applies to records older than the export watermark. This ensures a delayed nightly file cannot erase a newer live update. The exporter contract must guarantee that the snapshot represents all employees at its watermark.
 
-The HTTP upload spools to disk after 1 MiB and is read row by row into `snapshot_rows`, with invalid rows isolated in `sync_errors`. A SQL anti-join counts active employees absent from the file. At or above the configured missing threshold, the run is held. The operator sees the count and must explicitly approve before any changes are applied. On application, the service rechecks versions inside a write transaction, applies valid rows, deactivates eligible missing employees, inserts outbox records, records the approval actor, advances the tenant watermark, and marks the run applied. Individual row conflicts are reported and skipped without aborting the batch.
+The HTTP upload spools to disk after 1 MiB and is read row by row into `snapshot_rows`, with invalid rows isolated in `sync_errors`. A SQL anti-join counts active employees absent from the file. At or above the configured missing threshold, the run is held. The operator sees the count and must explicitly approve **with a reason** before any changes are applied. On application, the service rechecks versions inside a write transaction, applies valid rows, deactivates eligible missing employees, inserts outbox records, records the approval actor and reason, advances the tenant watermark, and marks the run applied. Individual row conflicts are reported and skipped without aborting the batch.
 
 ## Hardest flow: truncated nightly file
 
@@ -36,10 +36,10 @@ sequenceDiagram
   API->>DB: Mark run HELD if ratio >= 30%
   API-->>HR: Run ID, HELD, missing count
   OP->>API: Review errors and counts
-  OP->>API: Apply with explicit approval
+  OP->>API: Apply with explicit approval + reason
   API->>DB: Begin write transaction, recheck versions
   API->>DB: Update employees + bookings + outbox
-  API->>DB: Record approval actor, mark APPLIED, commit
+  API->>DB: Record approval actor + reason, mark APPLIED, commit
   API-->>OP: Applied count
 ```
 

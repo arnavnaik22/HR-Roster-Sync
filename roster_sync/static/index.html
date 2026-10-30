@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f6f2">
+  <title>Roster Desk · HR Sync Demo</title>
+  <link rel="stylesheet" href="/static/styles.css?v=2">
+  <script src="/static/app.js?v=2" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand" aria-label="Roster Desk">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="brand-copy"><strong>Roster Desk</strong><small>MoveInSync case study</small></span>
+    </div>
+    <nav aria-label="Main navigation">
+      <a href="#story">The problem</a>
+      <a href="/docs" target="_blank" rel="noopener">API docs <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="story">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-dot"></span> Employee transport · HR data sync</p>
+        <h1>A short file should never leave people without a ride.</h1>
+        <p class="lead">HR updates arrive late, twice, or incomplete. This small workspace shows how we keep a roster trustworthy before changes reach tomorrow’s trips.</p>
+        <div class="hero-actions">
+          <button class="button button-primary" id="start-demo" type="button">Open sample workspace <span aria-hidden="true">→</span></button>
+          <span class="quiet-note">A fresh, synthetic roster is created for this demo.</span>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="art-caption">A quick look at the decision</div>
+        <div class="art-row"><span class="art-icon file-icon">▤</span><span><strong>HR export</strong><small>6 records received</small></span><span class="art-time">22:04</span></div>
+        <div class="art-connector"></div>
+        <div class="art-row art-alert"><span class="art-icon alert-icon">!</span><span><strong>Review needed</strong><small>4 employees absent</small></span><span class="art-pill">On hold</span></div>
+        <div class="art-connector"></div>
+        <div class="art-row"><span class="art-icon check-icon">✓</span><span><strong>No bookings changed</strong><small>Waiting for a human decision</small></span></div>
+        <div class="art-footnote">The safe outcome comes first.</div>
+      </div>
+    </section>
+
+    <section class="workspace" id="workspace" hidden aria-label="Sample roster workspace">
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">Sample workspace</p>
+          <h2>Tonight’s roster check</h2>
+          <p>One office, ten people, and a deliberately incomplete export.</p>
+        </div>
+        <button class="button button-quiet" id="restart-demo" type="button">Start over <span aria-hidden="true">↺</span></button>
+      </div>
+
+      <div class="summary" aria-label="Roster summary">
+        <div class="metric"><span>Active employees</span><strong id="active-count">10</strong><small>In the current roster</small></div>
+        <div class="metric"><span>Missing from file</span><strong id="missing-count">—</strong><small id="missing-help">Check the sample export</small></div>
+        <div class="metric"><span>Sync decision</span><strong class="metric-status" id="sync-status">Not checked</strong><small id="sync-help">No changes have been made</small></div>
+      </div>
+
+      <div class="workspace-grid">
+        <section class="panel workflow-panel" aria-labelledby="workflow-title">
+          <div class="panel-topline"><span class="tiny-label">01 / REVIEW THE FILE</span><span class="file-chip">CSV · 6 rows</span></div>
+          <h3 id="workflow-title">Before this file changes the roster</h3>
+          <p>The sample export contains six of the ten active employees. Check it first; the app will pause if too many people are missing.</p>
+          <div class="file-preview"><span class="file-preview-icon" aria-hidden="true">▤</span><span><strong>nightly-hr-export.csv</strong><small>6 rows · Bengaluru office · sample data</small></span></div>
+          <button class="button button-primary action-button" id="check-file" type="button">Check sample file <span aria-hidden="true">→</span></button>
+
+          <div class="decision decision-held" id="held-decision" hidden>
+            <div class="decision-heading"><span class="decision-symbol" aria-hidden="true">!</span><div><strong>Paused for review</strong><span>Four active employees are missing. Nobody has been deactivated.</span></div></div>
+            <label for="approval-reason">Why is this file safe to apply?</label>
+            <textarea id="approval-reason" rows="3" maxlength="500" placeholder="For example: HR confirmed these four employees have left the company."></textarea>
+            <p class="field-help">Your name and reason are saved with the decision. Use a real reason in a real review.</p>
+            <button class="button button-danger action-button" id="approve-file" type="button" disabled>Approve and apply changes</button>
+          </div>
+
+          <div class="decision decision-complete" id="complete-decision" hidden>
+            <div class="decision-heading"><span class="decision-symbol" aria-hidden="true">✓</span><div><strong>Changes applied</strong><span id="complete-copy">The decision was recorded and the roster was updated.</span></div></div>
+          </div>
+        </section>
+
+        <section class="panel roster-panel" aria-labelledby="roster-title">
+          <div class="panel-topline"><span class="tiny-label">02 / SEE THE EFFECT</span><span class="live-dot">Sample data</span></div>
+          <h3 id="roster-title">People on the roster</h3>
+          <p>The four absent employees stay active until someone approves the file.</p>
+          <div class="roster-list" id="roster-list" aria-live="polite"></div>
+        </section>
+      </div>
+
+      <div class="secondary-grid">
+        <section class="panel proof-panel" aria-labelledby="proof-title">
+          <div class="panel-topline"><span class="tiny-label">03 / CHECK EVENT ORDER</span></div>
+          <h3 id="proof-title">What if an old update arrives late?</h3>
+          <p>Send version 11, then an older version 10 for Asha. The newer shift should remain in place.</p>
+          <button class="button button-outline" id="try-late" type="button" disabled>Try an out-of-order update</button>
+          <div class="proof-result" id="proof-result" hidden aria-live="polite"></div>
+        </section>
+        <section class="panel activity-panel" aria-labelledby="activity-title">
+          <div class="panel-topline"><span class="tiny-label">ACTIVITY</span></div>
+          <h3 id="activity-title">What happened</h3>
+          <ol class="activity-list" id="activity-list" aria-live="polite"></ol>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer"><span>Built for the MoveInSync SDE case study.</span><span>All names and records shown here are synthetic.</span></footer>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

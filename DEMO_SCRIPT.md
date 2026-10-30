@@ -1,9 +1,13 @@
-# 90-second demo outline
+# A simple live walkthrough
 
-1. Show `python -m unittest discover -s tests -v`. Point out the concurrent update, safety brake, and crash tests.
-2. Run `python api_demo.py`. Show the FastAPI requests for create, update, duplicate, and late events. Explain why the shift stays at version 2.
-3. Pause at the `HELD` export. Show the `409 APPROVAL_REQUIRED` result and that employee E9 is still active. Then show the approved run, the operator ID, and E9's deactivation.
-4. Show the injected downstream failure and the subsequent outbox retry. Explain that the employee transaction commits with an event row; the relay may deliver twice after a crash, so the consumer uses the stable event ID.
-5. Run `python bench.py`. Show that the 200,000-row export is compared against 200,000 existing employees, plus the time and peak process memory.
+Open `http://localhost:8000/` after `docker compose up --build`. The sample workspace creates a fresh tenant with synthetic employees, so every run starts clean.
 
-Use synthetic identities only. No real employee data belongs in a public demo.
+1. **Start with the person affected.** A short HR file can remove rides for people who are still employed. Click **Open sample workspace** and point to the ten active employees.
+2. **Check the file.** Click **Check sample file**. The six-row export is held because four active employees are missing. Show that they remain active while the file is held.
+3. **Make the decision visible.** Enter a specific approval reason and click **Approve and apply**. The result shows six active and four inactive employees; the activity panel records who approved the run and why.
+4. **Show event ordering.** Click **Try an out-of-order update**. A version 11 shift change applies; a later-arriving version 10 change is stale. The newest shift remains visible.
+5. **If asked about reliability, open the code or terminal.** `python api_demo.py` exercises duplicate events and outbox retry. `python -m unittest discover -s tests -v` runs the 14 tests. `python bench.py` measures the 200,000-row stage and diff.
+
+The [illustrated walkthrough](assets/demo.mp4) and [quick tour](assets/quick-tour.mp4) are useful if a live demo is impractical. They illustrate this flow with synthetic records and results checked against local runs; they are not a screen recording. The actual rules run in the web workspace and API.
+
+Keep the explanation direct: **the file pauses before anyone loses a ride; a human can review the exact missing people; the approval has a recorded reason.**
