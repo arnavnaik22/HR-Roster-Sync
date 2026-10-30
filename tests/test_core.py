@@ -36,6 +36,17 @@ class RosterTests(unittest.TestCase):
         with self.assertRaisesRegex(RosterError, "VERSION_CONFLICT"):
             self.store.apply_event("T1", event(version=7, shift="11:00"))
 
+    def test_explicit_create_update_deactivate_contract(self):
+        with self.assertRaisesRegex(RosterError, "UNKNOWN_EMPLOYEE"):
+            self.store.apply_event("T1", event(version=1, type="UPDATE"))
+        self.assertEqual(self.store.apply_event("T1", event(version=1, type="CREATE")), "APPLIED")
+        self.assertEqual(self.store.apply_event("T1", event(version=1, type="CREATE")), "DUPLICATE")
+        self.assertEqual(self.store.apply_event("T1", event(version=1, type="UPSERT")), "DUPLICATE")
+        with self.assertRaisesRegex(RosterError, "EMPLOYEE_EXISTS"):
+            self.store.apply_event("T1", event(version=2, type="CREATE"))
+        self.assertEqual(self.store.apply_event("T1", event(version=2, type="UPDATE", shift="18:00")), "APPLIED")
+        self.assertEqual(self.store.employee("T1", "E1")["shift"], "18:00")
+
     def test_transport_fields_survive_hr_update(self):
         self.store.apply_event("T1", event())
         self.store.set_transport_fields("T1", "E1", "PICKUP-A", "WHEELCHAIR")

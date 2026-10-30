@@ -28,11 +28,11 @@ def peak_rss_mib():
     return rss / (1024 if sys.platform != "darwin" else 1024 * 1024)
 from pathlib import Path
 
-from roster_sync.core import RosterStore
+from roster_sync.core import RosterStore, connect
 
 
-def rows(n):
-    for i in range(n):
+def rows(n, start=0):
+    for i in range(start, start + n):
         yield {"employee_id": f"E{i:06}", "name": "Example Employee", "email": f"e{i}@test.invalid",
                "phone": "+919999999999", "manager": "M1", "office_code": "BLR", "shift": "09:00",
                "source_version": 1}
@@ -43,9 +43,20 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         store = RosterStore(Path(tmp) / "bench.db")
         store.add_office("T1", "BLR")
+        # Setup is outside the measured interval. This produces a real 200k-row diff.
+        with connect(store.path) as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.executemany("INSERT INTO employees VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                ("T1", f"E{i:06}", "Example Employee", f"e{i}@test.invalid", "+919999999999",
+                 "M1", "BLR", "09:00", None, None, 1, 1, "setup") for i in range(n)))
+            db.commit()
         tracemalloc.start()
         start = time.perf_counter()
-        run = store.begin_snapshot("T1", 2, rows(n))
+        shifted = max(1, n // 200)
+        run = store.begin_snapshot("T1", 2, rows(n, shifted))
         elapsed = time.perf_counter() - start
         peak = tracemalloc.get_traced_memory()[1]
-        print(f"rows={n} stage_and_diff_seconds={elapsed:.3f} rows_per_second={n/elapsed:.0f} peak_python_mib={peak/1024/1024:.3f} peak_process_mib={peak_rss_mib():.1f} status={run.status} invalid={run.invalid}")
+        print(f"existing={n} export={n} missing={run.missing} new={shifted} "
+              f"stage_and_diff_seconds={elapsed:.3f} rows_per_second={n/elapsed:.0f} "
+              f"peak_python_mib={peak/1024/1024:.3f} peak_process_mib={peak_rss_mib():.1f} "
+              f"status={run.status} invalid={run.invalid}")

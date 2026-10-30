@@ -141,7 +141,7 @@ class RosterStore:
         if not ID.fullmatch(str(event.get("employee_id", ""))):
             raise RosterError("INVALID_EMPLOYEE_ID")
         typ = event.get("type", "UPSERT")
-        if typ not in ("UPSERT", "DEACTIVATE"):
+        if typ not in ("CREATE", "UPDATE", "UPSERT", "DEACTIVATE"):
             raise RosterError("INVALID_EVENT_TYPE")
         try:
             version = int(event["source_version"])
@@ -150,7 +150,7 @@ class RosterStore:
         if version < 0:
             raise RosterError("INVALID_VERSION")
         clean = {"employee_id": str(event["employee_id"]), "type": typ, "source_version": version}
-        if typ == "UPSERT":
+        if typ != "DEACTIVATE":
             for field in FIELDS[1:-1]:
                 value = event.get(field)
                 if not isinstance(value, str) or not value.strip() or len(value) > 255:
@@ -177,13 +177,19 @@ class RosterStore:
         clean = self._validate(db, tenant, event)
         employee, version, typ = clean["employee_id"], clean["source_version"], clean["type"]
         row = db.execute("SELECT source_version,source_hash,active FROM employees WHERE tenant_id=? AND employee_id=?", (tenant, employee)).fetchone()
-        event_hash = digest(clean)
+        # CREATE, UPDATE and snapshot UPSERT with the same version and HR fields
+        # represent the same source state, regardless of transport envelope.
+        event_hash = digest({key: clean[key] for key in FIELDS}) if typ != "DEACTIVATE" else digest(clean)
         if row and version < row["source_version"]:
             return "STALE"
         if row and version == row["source_version"]:
             if event_hash != row["source_hash"]:
                 raise RosterError("VERSION_CONFLICT", 409)
             return "DUPLICATE"
+        if typ == "CREATE" and row:
+            raise RosterError("EMPLOYEE_EXISTS", 409)
+        if typ == "UPDATE" and not row:
+            raise RosterError("UNKNOWN_EMPLOYEE", 404)
         if typ == "DEACTIVATE":
             if not row:
                 raise RosterError("UNKNOWN_EMPLOYEE", 404)
@@ -203,7 +209,7 @@ class RosterStore:
                 manager=excluded.manager,office_code=excluded.office_code,shift=excluded.shift,
                 active=1,source_version=excluded.source_version,source_hash=excluded.source_hash""",
                 (tenant, employee, clean["name"], clean["email"], clean["phone"], clean["manager"], clean["office_code"], clean["shift"], version, event_hash))
-            self._outbox(db, tenant, employee, "EMPLOYEE_UPSERTED", version)
+            self._outbox(db, tenant, employee, "EMPLOYEE_CREATED" if not row else "EMPLOYEE_UPDATED", version)
         return "APPLIED"
 
     def apply_event(self, tenant: str, event: dict, fail_after_write: bool = False) -> str:
