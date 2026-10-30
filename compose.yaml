@@ -1,0 +1,13 @@
+services:
+  roster-sync:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      ROSTER_DB: /data/roster.db
+      ROSTER_SECRET: ${ROSTER_SECRET:-development-only-secret-please-change-12345}
+      ROSTER_EVENT_URL: ${ROSTER_EVENT_URL:-}
+    volumes:
+      - roster-data:/data
+volumes:
+  roster-data:
