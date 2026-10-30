@@ -1,9 +1,9 @@
 # 90-second demo outline
 
 1. Show `python -m unittest discover -s tests -v`. Point out the concurrent update, safety brake, and crash tests.
-2. Run `python demo.py`. Explain why version 6 is ignored after version 7, and why the truncated export is held without deactivating anyone.
-3. Run `python bench.py`. Show the 200,000-row staging and diff time plus peak process memory.
-4. Show the API flow from `README.md`: create an office, submit an event, upload `examples/snapshot.csv`, inspect the run, and apply it.
-5. Explain the outbox boundary: the employee transaction commits with an event row; the relay may deliver twice after a crash, so the consumer uses the stable event ID.
+2. Run `python api_demo.py`. Show the FastAPI requests for create, update, duplicate, and late events. Explain why the shift stays at version 2.
+3. Pause at the `HELD` export. Show the `409 APPROVAL_REQUIRED` result and that employee E9 is still active. Then show the approved run, the operator ID, and E9's deactivation.
+4. Show the injected downstream failure and the subsequent outbox retry. Explain that the employee transaction commits with an event row; the relay may deliver twice after a crash, so the consumer uses the stable event ID.
+5. Run `python bench.py`. Show that the 200,000-row export is compared against 200,000 existing employees, plus the time and peak process memory.
 
 Use synthetic identities only. No real employee data belongs in a public demo.

@@ -1,0 +1,33 @@
+name: Case study checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s tests -v
+      - run: python api_demo.py
+      - run: python -m compileall -q roster_sync tests
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up --build -d
+      - run: |
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8000/v1/health; then exit 0; fi
+            sleep 1
+          done
+          docker compose logs
+          exit 1
+      - if: always()
+        run: docker compose down -v

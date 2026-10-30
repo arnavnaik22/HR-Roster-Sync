@@ -51,6 +51,9 @@ class ApiTests(unittest.TestCase):
         applied = self.client.post(f"/v1/runs/{run['run_id']}/apply", json={"approve_missing": True},
                                    headers=self.auth(subject="operator-123"))
         self.assertEqual(applied.status_code, 200)
+        self.assertEqual(applied.json()["invalid"], 6)
+        self.assertEqual({row["code"] for row in self.client.get(
+            f"/v1/runs/{run['run_id']}/errors", headers=self.auth()).json()}, {"VERSION_CONFLICT"})
         self.assertEqual(self.client.get(f"/v1/runs/{run['run_id']}", headers=self.auth()).json()["approved_by"], "operator-123")
         self.assertEqual(self.store.employee("T1", "E9")["active"], 0)
 

@@ -28,7 +28,7 @@ def peak_rss_mib():
     return rss / (1024 if sys.platform != "darwin" else 1024 * 1024)
 from pathlib import Path
 
-from roster_sync.core import RosterStore, connect
+from roster_sync.core import RosterStore, connect, digest
 
 
 def rows(n, start=0):
@@ -36,6 +36,13 @@ def rows(n, start=0):
         yield {"employee_id": f"E{i:06}", "name": "Example Employee", "email": f"e{i}@test.invalid",
                "phone": "+919999999999", "manager": "M1", "office_code": "BLR", "shift": "09:00",
                "source_version": 1}
+
+
+def existing_rows(n):
+    for item in rows(n):
+        yield ("T1", item["employee_id"], item["name"], item["email"], item["phone"],
+               item["manager"], item["office_code"], item["shift"], None, None,
+               1, item["source_version"], digest(item))
 
 
 if __name__ == "__main__":
@@ -46,9 +53,7 @@ if __name__ == "__main__":
         # Setup is outside the measured interval. This produces a real 200k-row diff.
         with connect(store.path) as db:
             db.execute("BEGIN IMMEDIATE")
-            db.executemany("INSERT INTO employees VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-                ("T1", f"E{i:06}", "Example Employee", f"e{i}@test.invalid", "+919999999999",
-                 "M1", "BLR", "09:00", None, None, 1, 1, "setup") for i in range(n)))
+            db.executemany("INSERT INTO employees VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", existing_rows(n))
             db.commit()
         tracemalloc.start()
         start = time.perf_counter()

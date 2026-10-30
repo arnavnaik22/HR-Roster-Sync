@@ -119,6 +119,9 @@ class RosterStore:
             db.execute("INSERT OR IGNORE INTO offices VALUES (?,?)", (tenant, office))
         with self._office_cache_lock:
             self._office_cache[(tenant, office)] = time.monotonic() + 5
+            self._office_cache.move_to_end((tenant, office))
+            if len(self._office_cache) > 4096:
+                self._office_cache.popitem(last=False)
 
     def _office_known(self, db: sqlite3.Connection, tenant: str, office: str) -> bool:
         key, now = (tenant, office), time.monotonic()

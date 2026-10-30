@@ -92,6 +92,8 @@ class RosterTests(unittest.TestCase):
         self.assertIsNone(self.store.employee("T1", "E1"))
         self.assertEqual(self.store.pending_count("T1"), 0)
         self.store.apply_event("T1", event())
+        restarted = RosterStore(self.store.path)
+        self.assertEqual(restarted.pending_count("T1"), 1)
         seen = []
         def fail(event_id, payload):
             seen.append(event_id)
@@ -102,6 +104,11 @@ class RosterTests(unittest.TestCase):
         self.store.publish_pending("T1", lambda event_id, payload: seen.append(event_id))
         self.assertEqual(seen[0], seen[1])
         self.assertEqual(self.store.pending_count("T1"), 0)
+
+    def test_office_cache_is_tenant_scoped(self):
+        self.store.apply_event("T1", event())
+        with self.assertRaisesRegex(RosterError, "UNKNOWN_OFFICE"):
+            self.store.apply_event("T3", event())
 
     def test_concurrent_versions_cannot_regress(self):
         self.store.apply_event("T1", event(version=1))
