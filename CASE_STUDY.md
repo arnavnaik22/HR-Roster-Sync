@@ -130,7 +130,7 @@ For a multi-instance rollout, the next step is PostgreSQL with guarded per-emplo
 
 ## 12. Repository and references
 
-- **Source and commit history:** https://github.com/arnavnaik22/HR-Roster-Sync (available after the final push).
+- **Source and commit history:** [https://github.com/arnavnaik22/HR-Roster-Sync](https://github.com/arnavnaik22/HR-Roster-Sync).
 - **Run instructions and full benchmark boundaries:** `README.md`.
 - **Architecture, sequence, and failure table:** `DESIGN.md`.
 - **Live walkthrough:** `DEMO_WALKTHROUGH.md`.
@@ -139,4 +139,4 @@ For a multi-instance rollout, the next step is PostgreSQL with guarded per-emplo
 - **Outbox pattern context:** [Debezium Outbox Event Router documentation](https://debezium.io/documentation/reference/transformations/outbox-event-router.html).
 - **SQLite transaction behavior:** [Python 3.12 sqlite3 documentation](https://docs.python.org/3.12/library/sqlite3.html#transaction-control).
 
-All sample identities are fictional. The repository URL above hosts the source and documentation after publication.
+The repository URL above hosts the source and documentation.
