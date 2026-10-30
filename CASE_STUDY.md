@@ -1,19 +1,19 @@
-# HR Roster Sync: a safe path from HR changes to employee transport
+# Roster Desk: reliable HR-to-transport synchronization
 
-**MoveInSync SDE case study 5 | Submission report | 31 October 2026**
+**Technical report | 31 October 2026**
 **Repository:** https://github.com/arnavnaik22/HR-Roster-Sync
 **Implementation:** Python 3.12, FastAPI, SQLite, Docker Compose
 **Demo:** `docker compose up --build`, then open `http://localhost:8000/`
 
-> **Central decision:** a nightly file is a claim about the complete roster, not merely a list of rows to upsert. I stage it, measure what is absent, and hold a suspicious file before changing anyone's transport eligibility.
+> **Core principle:** a nightly file represents the complete roster at a source watermark. Roster Desk stages the file, measures what is absent, and holds a suspicious export before changing anyone's transport eligibility.
 
 ## 1. Problem and user impact
 
 An employer's HR system sends near-real-time joiner, transfer, shift, and exit events to MoveInSync. It also sends a full nightly export of up to 200,000 employees. Duplicates, late delivery, invalid records, and cut-short files are normal failure modes. The transport roster must reflect legitimate HR changes without erasing fields set by the transport team.
 
-The most consequential example is a truncated export. Suppose 200,000 people are active but the file ends after 120,000. A naive missing-row deletion could remove 80,000 employees from transport eligibility and cancel future rides. A correct sync must detect the large discrepancy and wait for a human decision. The case study specifies a 30% missing threshold, per-employee ordering, field ownership, an outbox, booking cancellation, a 200,000-row diff under 60 seconds, and tests for concurrency and failure.
+The most consequential example is a truncated export. Suppose 200,000 people are active but the file ends after 120,000. A naive missing-row deletion could remove 80,000 employees from transport eligibility and cancel future rides. A safe sync must detect the large discrepancy and wait for a human decision. The service uses a configurable 30% missing threshold, per-employee ordering, field ownership, an outbox, booking cancellation, and bounded-memory reconciliation.
 
-This implementation makes that decision visible in a small operator workspace. The sample starts with 10 synthetic employees, uploads a file containing six, holds the file because four are missing, records an approval reason, then applies the change. A later-arriving old update is rejected. The workspace is an explanation of the real API flow; the sync rules are implemented in the backend.
+The operator workspace makes the decision visible. The sample starts with 10 fictional employees, uploads a file containing six, holds the file because four are missing, records an approval reason, then applies the change. A later-arriving old update is rejected. The workspace uses the same API as an external caller; the sync rules run in the backend.
 
 ## 2. Scope and source contract
 
@@ -39,7 +39,7 @@ Operator -> guided workspace -> same API -> held-run review + approval audit
 
 FastAPI handles signed bearer tokens, role checks, tenant scope, bounded uploads, and safe HTTP responses. `RosterStore` owns validation, ordering, snapshot staging, reconciliation, booking effects, and outbox insertion. The database has employee and office tables keyed by tenant; a staging table keyed by run and employee; run and row-error tables; a tenant snapshot watermark; future bookings; and a pending outbox. Each event transition is one SQLite write transaction. Snapshot staging and snapshot application are separate transactions so an operator can inspect a held file without changing employees.
 
-SQLite is a deliberate assessment choice: one command starts the app and the transaction boundary is easy to inspect. It is a single-writer demo database, not the proposed multi-node production store.
+SQLite keeps local deployment to one command and gives the service a clear transaction boundary. Its single-writer model limits concurrent throughput; a multi-node deployment would use PostgreSQL.
 
 ## 4. Ordering, idempotency, and ownership
 
@@ -74,13 +74,13 @@ Invalid rows stay absent from staging, so they can increase the missing fraction
 
 At application time the service obtains a write lock, rejects an old snapshot watermark, and rechecks per-employee versions. A live event newer than the file watermark remains untouched. Valid staged rows apply; a row that conflicts at application time is reported and skipped. Eligible missing employees are deactivated at the watermark. The employee changes, booking cancellations, outbox records, run status, and tenant watermark commit together. Reapplying an already applied run returns the previous result. Staging rows are removed after application.
 
-The threshold is a safety brake, not proof that a file is complete: an incorrect export missing 20% could still pass. In production I would add expected-count checks, source checksums, historical-delta alerts, and source-side completion markers. Approval must be an informed decision, not a button pressed to clear a warning.
+The threshold limits the impact of a damaged file, but it cannot establish completeness: an incorrect export missing 20% could still pass. A production integration should add expected-count checks, source checksums, historical-delta alerts, and source-side completion markers. Approval requires a review of the source data.
 
 ## 6. Downstream consistency and booking effects
 
 For every applied employee change, the same transaction inserts an outbox row with a stable event ID. A `DEACTIVATE` also changes future `CONFIRMED` bookings to `CANCELLED` and emits a booking-cancellation event when there were bookings. The demo models cancellation as releasing the booking's claim on a seat; it does **not** maintain a separate vehicle seat-inventory table. A production booking service would own seat accounting and consume the cancellation idempotently.
 
-The relay polls pending outbox rows and sends them to a configured HTTP consumer with the event ID as an idempotency key. Without a configured consumer, the local demo logs the event type and ID only. A database rollback leaves neither employee change nor event. If the database commits but the relay fails, the event remains pending for retry. The network guarantee is **at least once**, because a relay can crash after the consumer accepts an event but before the outbox row is marked sent. Consumers must deduplicate on the stable ID. I do not claim exactly-once delivery across the network.
+The relay polls pending outbox rows and sends them to a configured HTTP consumer with the event ID as an idempotency key. Without a configured consumer, the local run logs the event type and ID only. A database rollback leaves neither employee change nor event. If the database commits but the relay fails, the event remains pending for retry. The network guarantee is **at least once**, because a relay can crash after the consumer accepts an event but before the outbox row is marked sent. Consumers must deduplicate on the stable ID.
 
 ## 7. Failure behavior and evidence
 
@@ -96,13 +96,13 @@ The relay polls pending outbox rows and sends them to a configured HTTP consumer
 | Tenant or role mismatch | Access rejected | `test_auth_roles_and_tenant_boundary` |
 | HR update to transport preference | Preference preserved | `test_transport_fields_survive_hr_update` |
 
-The failure test injects an exception before commit; it is not a literal operating-system process kill. The demo also injects a publisher failure to show retry. The tests establish these local behaviors, not multi-node fault tolerance.
+The rollback test injects an exception before commit. The API walkthrough injects a publisher failure to exercise retry. These cover local failure behavior; multi-node recovery remains a deployment concern.
 
 ## 8. Measured results and limits
 
-The benchmark ran on Windows 11, Python 3.12.14, Intel64 Family 6 Model 186, with 12 logical CPUs. It preloaded 200,000 existing employees **before** timing. The timed operation staged a 200,000-row export with 1,000 missing and 1,000 new records and ran the missing-row comparison. A recorded run took **14.946 seconds** (about 13,381 rows per second), below the brief's 60-second target. Peak process working set was **24.0 MiB**; the SQLite database file and OS page cache are outside that number. The timed interval does **not** include applying 200,000 changes or remote delivery.
+The benchmark ran on Windows 11, Python 3.12.14, Intel64 Family 6 Model 186, with 12 logical CPUs. It preloaded 200,000 existing employees **before** timing. The timed operation staged a 200,000-row export with 1,000 missing and 1,000 new records and ran the missing-row comparison. A recorded run took **14.946 seconds** (about 13,381 rows per second), below the 60-second performance target. Peak process working set was **24.0 MiB**; the SQLite database file and OS page cache are outside that number. The timed interval does **not** include applying 200,000 changes or remote delivery.
 
-An in-process FastAPI benchmark of 1,000 event requests measured **59.1 requests/second**, **15.88 ms p50**, and **39.73 ms p99** on the same machine. It includes local SQLite commits but no network hop, external broker, or production load mix. These are reproducible local observations, not a production service-level objective. Run `python bench.py` and `python bench_api.py` to regenerate them.
+An in-process FastAPI benchmark of 1,000 event requests measured **59.1 requests/second**, **15.88 ms p50**, and **39.73 ms p99** on the same machine. It includes local SQLite commits but no network hop, external broker, or production load mix. These are local measurements rather than a production service-level objective. Run `python bench.py` and `python bench_api.py` to regenerate them.
 
 CSV staging is O(n) time with bounded application memory; rows occupy O(n) database disk space. The indexed comparison is O(n + m) in the worst case over staged and stored employees. Each event uses indexed per-employee access. The first scaling constraint is SQLite's single writer, especially a large snapshot apply transaction. A growing outbox when the consumer is unavailable is another operational limit.
 
@@ -114,30 +114,29 @@ Tenant-scoped metrics expose pending outbox count, oldest pending age, held runs
 
 ## 10. Design trade-offs and next steps
 
-The design favors correctness during source ambiguity: a suspicious file pauses, conflicting same-version events are rejected, and database failure blocks a write. The relay is asynchronous, so downstream consumers may see a short delay and must tolerate duplicates. The use of SQLite, a local token issuer, and one process keeps the assessment inspectable but limits concurrent throughput and deployment scale. Python is allowed by the brief; `RosterStore` encapsulates the core logic, while the API supplies the controller boundary. This is not a claim of Java-style inheritance or a full enterprise service architecture.
+The design favors correctness during source ambiguity: a suspicious file pauses, conflicting same-version events are rejected, and database failure blocks a write. The relay is asynchronous, so downstream consumers may see a short delay and must tolerate duplicates. SQLite, a local token issuer, and one process simplify deployment but limit concurrent throughput and scale. `RosterStore` encapsulates the core rules; the API handles authentication and HTTP concerns.
 
-For a multi-instance production rollout, I would use PostgreSQL with guarded per-employee writes, a company identity provider with key rotation, a broker or CDC outbox relay, and idempotent booking consumers. I would avoid one very long write transaction for massive snapshot activation, add a source completion marker, and monitor outbox lag and approvals. The source version, field ownership, hold-before-apply, and event-ID rules should remain the same.
+For a multi-instance rollout, the next step is PostgreSQL with guarded per-employee writes, a company identity provider with key rotation, a broker or CDC outbox relay, and idempotent booking consumers. Large snapshots should avoid one long write transaction, add a source completion marker, and monitor outbox lag and approvals. The source version, field ownership, hold-before-apply, and event-ID rules remain applicable.
 
-## 11. How to review and discuss it
+## 11. Product walkthrough
 
 1. Run `docker compose up --build` and open `http://localhost:8000/`. Start the synthetic workspace.
 2. Show 10 active employees. Check the six-row file and show `HELD` with four missing; no one is deactivated yet.
 3. Enter a meaningful reason, approve, and show six active employees plus the audit entry.
 4. Send the out-of-order example from the screen; version 11 survives the later arrival of version 10.
-5. Run `python -m unittest discover -s tests -v` (14 tests), `python api_demo.py` (API and retry), and `python bench.py` (200,000-row stage/diff) if asked for proof.
+5. Run `python -m unittest discover -s tests -v` (14 tests), `python api_demo.py` (API and retry), and `python bench.py` (200,000-row stage/diff) to reproduce the validation results.
 
-**A defensible one-minute summary:** “I treated a nightly file as a complete roster claim. I stage it and count missing active employees before applying changes. At 30% missing, the run pauses and requires an operator's recorded reason. Live events are ordered by source version, and HR changes cannot overwrite transport preferences. Employee changes and outbox rows commit together, so retries are safe. I tested concurrent versions and rollback, and timed the 200,000-row stage and diff. SQLite and the simple relay are demo choices; I would change those for a production rollout.”
+**System summary.** Roster Desk treats a nightly file as a complete roster claim. It stages the file and counts missing active employees before applying changes. At 30% missing, the run pauses and requires an operator's recorded reason. Live events are ordered by source version, and HR changes cannot overwrite transport preferences. Employee changes and outbox rows commit together. Concurrency, rollback, and a 200,000-row stage and diff have been exercised locally.
 
 ## 12. Repository and references
 
 - **Source and commit history:** https://github.com/arnavnaik22/HR-Roster-Sync (available after the final push).
 - **Run instructions and full benchmark boundaries:** `README.md`.
 - **Architecture, sequence, and failure table:** `DESIGN.md`.
-- **Reproducible interview flow:** `DEMO_SCRIPT.md` and `INTERVIEW_GUIDE.md`.
-- **Illustrated videos:** `assets/demo.mp4` and `assets/quick-tour.mp4`. These are illustrated walkthroughs, not a live screen recording.
-- **Assignment source:** MoveInSync Backend Case Study 2026, Case Study 5: “HR Roster Sync - Idempotent, Out-of-Order, Self-Healing” (provided assessment PDF).
+- **Live walkthrough:** `DEMO_WALKTHROUGH.md`.
+- **Product videos:** `assets/demo.mp4` and `assets/quick-tour.mp4`.
 - **Product context:** [MoveInSync HRMS integration guide](https://moveinsync.com/support-article/how-to-integrate-transport-management-software-with-hr-payroll-and-erp-tools).
 - **Outbox pattern context:** [Debezium Outbox Event Router documentation](https://debezium.io/documentation/reference/transformations/outbox-event-router.html).
 - **SQLite transaction behavior:** [Python 3.12 sqlite3 documentation](https://docs.python.org/3.12/library/sqlite3.html#transaction-control).
 
-All sample identities are synthetic. The repository URL is configured locally but the user will perform the final public GitHub push.
+All sample identities are fictional. The repository URL above hosts the source and documentation after publication.

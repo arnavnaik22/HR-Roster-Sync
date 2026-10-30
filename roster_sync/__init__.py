@@ -1,1 +1,1 @@
-"""MoveInSync case study: deterministic employee roster synchronization."""
+"""Roster Desk: deterministic employee roster synchronization."""

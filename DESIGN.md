@@ -1,4 +1,4 @@
-# Design note
+# Architecture and operating model
 
 ## Architecture
 

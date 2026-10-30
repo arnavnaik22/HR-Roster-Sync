@@ -2,9 +2,9 @@
 
 An HR export arrives with six names where there should be ten. Applying it blindly could cancel four people's future rides. Roster Desk shows the decision an operator should see: **pause the file, show who is missing, and record a reason before applying it**.
 
-This is a working implementation of MoveInSync SDE case study 5, built with **Python 3.12, FastAPI, and SQLite**. The backend also handles duplicate and late events, field ownership, tenant isolation, booking cancellation, and a transactional outbox. The web screen makes those rules easier to inspect; the core remains testable without a browser.
+Roster Desk is an HR-to-transport synchronization service built with **Python 3.12, FastAPI, and SQLite**. It handles duplicate and late events, field ownership, tenant isolation, booking cancellation, and a transactional outbox. The operator workspace makes the decision visible; the core remains testable without a browser.
 
-For the full submission narrative, read the [case study PDF](CASE_STUDY.pdf) or its [editable Markdown source](CASE_STUDY.md). It maps the brief to the implementation, test evidence, benchmark boundaries, design trade-offs, and a discussion-ready walkthrough.
+The [technical report](CASE_STUDY.pdf) and its [Markdown source](CASE_STUDY.md) cover the architecture, behavior, measured results, failure handling, and operational limits.
 
 ## Start here
 
@@ -30,11 +30,11 @@ python bench_api.py
 
 `api_demo.py` runs real FastAPI requests in process and shows duplicate and late events, a truncated export, explicit approval, and outbox retry. It uses synthetic identities only.
 
-The [one-minute illustrated walkthrough](assets/demo.mp4) tells the same story in plain language; the [quick tour](assets/quick-tour.mp4) is shorter. They use synthetic records and figures verified against real local API, test, and benchmark runs. The reproducible commands and live presentation order are in [DEMO_SCRIPT.md](DEMO_SCRIPT.md), and [INTERVIEW_GUIDE.md](INTERVIEW_GUIDE.md) has short, honest answers to likely follow-up questions.
+The [product walkthrough](assets/demo.mp4) and [quick tour](assets/quick-tour.mp4) show the review flow with sample records and figures verified against local API, test, and benchmark runs. [DEMO_WALKTHROUGH.md](DEMO_WALKTHROUGH.md) lists the steps for a live demonstration.
 
-## Why this design fits the problem
+## Capabilities and validation
 
-| Case-study requirement | Implementation | How to prove it |
+| Capability | Implementation | Validation |
 |---|---|---|
 | Create, update, deactivate events | `POST /v1/events`; explicit `CREATE`, `UPDATE`, `DEACTIVATE` and snapshot `UPSERT` | `test_explicit_create_update_deactivate_contract` |
 | Invalid rows do not fail a file | Stream CSV to a staging table; save row number, employee ID, and error code | `test_invalid_record_does_not_fail_snapshot` |
@@ -106,7 +106,7 @@ Measured on **Windows 11, Python 3.12.14, Intel64 Family 6 Model 186, 12 logical
 | 1,000 FastAPI event requests | **59.1 requests/s** | In-process `TestClient`, SQLite commits, no network or relay |
 | FastAPI write latency | **p50 15.88 ms; p99 39.73 ms** | Same single-process run; not a distributed production SLO |
 
-The setup of the 200,000 existing employees happens **before** the timed interval. `bench.py` stages the export and runs the indexed missing-row comparison inside the interval. It does not time applying all 200,000 changes. Re-run these scripts on the target machine before quoting numbers in an interview.
+The setup of the 200,000 existing employees happens **before** the timed interval. `bench.py` stages the export and runs the indexed missing-row comparison inside the interval. It does not time applying all 200,000 changes. Re-run these scripts on the target machine when comparing performance.
 
 Complexity: event processing performs O(1) indexed lookups/writes per employee. Streaming CSV staging is O(n) time and O(1) application memory, excluding the 1 MiB HTTP spool, SQLite cache, and database file. The anti-join touches O(n + m) indexed rows in the worst case. The main limits are SQLite's single-writer contention, the duration of applying a large snapshot in one transaction, and growth of the outbox if the consumer is unavailable.
 
@@ -123,7 +123,7 @@ python bench_events.py
 
 All **14 tests pass** locally. They cover a concurrent version race, process failure before transaction commit, relay failure and retry, invalid rows, same-version conflicts, tenant isolation, role checks, snapshot approval audit, field ownership, booking cancellation, stale snapshot rejection, and the guided web demo. The actual Uvicorn process also passed a `/v1/health` request locally. `DESIGN.md` contains the architecture diagram, sequence diagram, failure-mode table, and trade-offs.
 
-GitHub Actions runs the tests, the API walkthrough, bytecode compilation, and a Docker Compose health check on each push. The workflow has not run until the first GitHub push.
+GitHub Actions runs the tests, the API walkthrough, bytecode compilation, and a Docker Compose health check on each push.
 
 Configuration:
 
@@ -140,24 +140,17 @@ The `/v1/metrics` response is tenant-scoped: pending outbox count, oldest pendin
 
 ## Trade-offs and production path
 
-SQLite makes the assessment runnable with one command and gives a clear, testable transaction boundary. It is **not** the database choice for a multi-node production rollout. For MoveInSync scale, move the schema to PostgreSQL, use a guarded upsert or row lock for per-employee ordering, and use a reliable broker/CDC relay for the outbox. Partition or stage large imports, then activate a validated snapshot without holding one long write transaction. Retain the same version, ownership, safety, and idempotency rules.
+SQLite makes the local deployment runnable with one command and gives a clear, testable transaction boundary. A multi-node production rollout should use PostgreSQL, a guarded upsert or row lock for per-employee ordering, and a reliable broker/CDC relay for the outbox. Partition or stage large imports, then activate a validated snapshot without holding one long write transaction. Retain the same version, ownership, safety, and idempotency rules.
 
-The HMAC token issuer is a local assessment tool, not an enterprise identity provider. A production boundary needs the company's IdP/JWKS, key rotation, TLS, rate limits, and employee-level permissions. This implementation intentionally exposes only operator-facing employee fields and never logs personal data. It uses a simple one-second relay retry; production should add backoff, dead-letter handling, and tracing.
+The HMAC token issuer supports the local deployment. A production boundary needs the company's IdP/JWKS, key rotation, TLS, rate limits, and employee-level permissions. This implementation exposes only operator-facing employee fields and never logs personal data. It uses a simple one-second relay retry; production should add backoff, dead-letter handling, and tracing.
 
-## GitHub submission
+## Repository
 
-This folder is already a Git repository with separate commits for the core, API, benchmarks, and documentation. `origin` is configured as [arnavnaik22/HR-Roster-Sync](https://github.com/arnavnaik22/HR-Roster-Sync). The repository is currently empty. From this folder, the final publication step is:
-
-```sh
-git push -u origin main
-```
-
-Do not add real employee records or a `.env` file. The included CSV and demo use synthetic data. The source archive in the parent `outputs` folder is convenient for review, but **the local Git folder retains the commit history**; an archive alone does not.
+Source and revision history: [arnavnaik22/HR-Roster-Sync](https://github.com/arnavnaik22/HR-Roster-Sync). The included CSV and workspace use synthetic data. Keep employee records and local `.env` files out of the repository.
 
 ## References
 
-- [MoveInSync data sync help](https://helpcenter.moveinsync.com/support/solutions/articles/1070000136106-data-sync-schedule-sync) and [HRMS integration guide](https://moveinsync.com/support-article/how-to-integrate-transport-management-software-with-hr-payroll-and-erp-tools) establish the product relevance.
-- [MoveInSync backend role description](https://moveinsync.com/join-us) emphasizes reliable event-driven services, database correctness, and observability.
+- [MoveInSync data sync help](https://helpcenter.moveinsync.com/support/solutions/articles/1070000136106-data-sync-schedule-sync) and [HRMS integration guide](https://moveinsync.com/support-article/how-to-integrate-transport-management-software-with-hr-payroll-and-erp-tools) provide product context.
 - [FastAPI deployment guide](https://fastapi.tiangolo.com/deployment/docker/) supports the container layout.
 - [Python SQLite transaction documentation](https://docs.python.org/3.12/library/sqlite3.html#transaction-control) explains the explicit transaction mode used here.
 - [Debezium outbox event router](https://debezium.io/documentation/reference/transformations/outbox-event-router.html) describes the production outbox pattern.

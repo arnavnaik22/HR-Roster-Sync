@@ -98,7 +98,7 @@ def create_app(store: RosterStore, secret: str, event_url: str = "", relay_enabl
         if thread:
             thread.join(timeout=4)
 
-    app = FastAPI(title="MoveInSync HR Roster Sync", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="Roster Desk API", version="1.0.0", lifespan=lifespan)
     static_dir = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
