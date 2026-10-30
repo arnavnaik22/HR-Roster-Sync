@@ -1,36 +1,16 @@
-# Roster Desk · HR Roster Sync
+# HR Roster Sync
 
-An HR export arrives with six names where there should be ten. Applying it blindly could cancel four people's future rides. Roster Desk shows the decision an operator should see: **pause the file, show who is missing, and record a reason before applying it**.
+HR Roster Sync ingests versioned employee changes and reconciles full HR exports with a transport roster. It validates records, preserves transport-owned fields, handles duplicate and out-of-order events, and produces downstream changes through a transactional outbox. Snapshot reconciliation includes a configurable approval gate for large unexpected reductions in active employees.
 
-Roster Desk is an HR-to-transport synchronization service built with **Python 3.12, FastAPI, and SQLite**. It handles duplicate and late events, field ownership, tenant isolation, booking cancellation, and a transactional outbox. The operator workspace makes the decision visible; the core remains testable without a browser.
+The service is implemented in **Python 3.12, FastAPI, and SQLite**. The repository includes an operator interface, automated tests, performance benchmarks, and a [technical report](CASE_STUDY.pdf) ([source](CASE_STUDY.md)).
 
-The [technical report](CASE_STUDY.pdf) and its [Markdown source](CASE_STUDY.md) cover the architecture, behavior, measured results, failure handling, and operational limits.
-
-## Start here
-
-The one-command application run is:
+## Quick start
 
 ```sh
 docker compose up --build
 ```
 
-Open **`http://localhost:8000/`** and click **Open sample workspace**. Check the sample file, read the hold decision, enter an approval reason, and try the late update. The screen uses the same API as an external HR system; it creates a fresh tenant with synthetic records for each walkthrough. Generated API documentation is at `http://localhost:8000/docs`.
-
-Compose binds the app to **localhost** and enables sample mode. It supplies a **local-demo-only** signing secret and persists SQLite in a Docker volume. Sample mode issues short-lived tokens for its synthetic tenant; leave `ROSTER_DEMO_MODE=0` outside this local walkthrough. Set `ROSTER_SECRET` to a random value of at least 32 characters outside a local demo. Docker is not required for the unit tests if Python dependencies are installed.
-
-For a complete synthetic walkthrough:
-
-```sh
-python -m pip install -r requirements-dev.txt
-python api_demo.py
-python -m unittest discover -s tests -v
-python bench.py
-python bench_api.py
-```
-
-`api_demo.py` runs real FastAPI requests in process and shows duplicate and late events, a truncated export, explicit approval, and outbox retry. It uses synthetic identities only.
-
-The [product walkthrough](assets/demo.mp4) and [quick tour](assets/quick-tour.mp4) show the review flow with sample records and figures verified against local API, test, and benchmark runs. [DEMO_WALKTHROUGH.md](DEMO_WALKTHROUGH.md) lists the steps for a live demonstration.
+The application is available at `http://localhost:8000/`; OpenAPI documentation is at `http://localhost:8000/docs`. Compose binds the published port to localhost, enables sample mode, and persists SQLite in a Docker volume. The included signing secret is for local use only. Set `ROSTER_SECRET` to a random value of at least 32 characters and disable `ROSTER_DEMO_MODE` outside the local sample environment.
 
 ## Capabilities and validation
 
@@ -41,8 +21,8 @@ The [product walkthrough](assets/demo.mp4) and [quick tour](assets/quick-tour.mp
 | Duplicate and out-of-order events | Per-employee source version and canonical source-state hash | `test_replay_stale_and_conflict`, concurrency test |
 | Field ownership | HR writes HR columns; transport-admin API writes pickup and assistance | `test_transport_fields_survive_hr_update` |
 | 200,000-row nightly diff | Indexed staging table and SQL anti-join; no full-file Python list | `bench.py` with 200,000 stored and 200,000 exported rows |
-| Suspicious export safety brake | Hold if at least 30% of eligible active employees are missing; operator ID and reason recorded | `test_safety_brake_and_approval`, guided web walkthrough |
-| Reliable downstream change events | Employee/bookings/outbox share one database transaction; retrying relay | `test_crash_rolls_back_employee_and_event`, API walkthrough |
+| Suspicious export approval gate | Hold if at least 30% of eligible active employees are missing; operator ID and reason recorded | `test_safety_brake_and_approval`, `test_csv_stream_hold_and_approval_audit` |
+| Reliable downstream change events | Employee/bookings/outbox share one database transaction; retrying relay | `test_crash_rolls_back_employee_and_event`, `api_demo.py` |
 | Deactivation side effects | Cancel future confirmed bookings in the same transaction; emit change events | `test_deactivation_cancels_future_bookings` |
 | Authentication and tenant isolation | Signed expiring bearer tokens with tenant and role; all reads and writes tenant-scoped | `test_auth_roles_and_tenant_boundary` |
 | Caching, metrics, safe errors | 5-second positive office-code LRU; pending/lag/held/invalid metrics; code-only errors | Tests and `GET /v1/metrics` |
@@ -56,7 +36,7 @@ The [product walkthrough](assets/demo.mp4) and [quick tour](assets/quick-tour.mp
 5. Operator calls `POST /v1/runs/{id}/apply` with `{"approve_missing":false}`. A held run returns `APPROVAL_REQUIRED`. To proceed after checking the source file, the operator sends `{"approve_missing":true,"reason":"HR confirmed planned export reduction"}`. The operator ID and reason are saved with the run.
 6. The relay publishes outbox events to `ROSTER_EVENT_URL` using `Idempotency-Key`. Without a URL, demo events are printed without personal data.
 
-Generate demo tokens from the running container:
+Generate local tokens from the running container:
 
 ```sh
 docker compose exec roster-sync python -m roster_sync token acme operator operator-123
@@ -79,7 +59,7 @@ Supply the returned value as `Authorization: Bearer TOKEN`. A minimal event body
 }
 ```
 
-See [api_demo.py](api_demo.py) for exact requests and expected outcomes. The sample upload is [examples/snapshot.csv](examples/snapshot.csv).
+See [api_demo.py](api_demo.py) for request examples and expected outcomes. The sample upload is [examples/snapshot.csv](examples/snapshot.csv).
 
 ## Correctness contract
 
@@ -110,20 +90,21 @@ The setup of the 200,000 existing employees happens **before** the timed interva
 
 Complexity: event processing performs O(1) indexed lookups/writes per employee. Streaming CSV staging is O(n) time and O(1) application memory, excluding the 1 MiB HTTP spool, SQLite cache, and database file. The anti-join touches O(n + m) indexed rows in the worst case. The main limits are SQLite's single-writer contention, the duration of applying a large snapshot in one transaction, and growth of the outbox if the consumer is unavailable.
 
-## Run and test details
+## Tests and benchmarks
 
 ```sh
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 python api_demo.py
-python demo.py
 python bench.py
 python bench_api.py
-python bench_events.py
 ```
 
-All **14 tests pass** locally. They cover a concurrent version race, process failure before transaction commit, relay failure and retry, invalid rows, same-version conflicts, tenant isolation, role checks, snapshot approval audit, field ownership, booking cancellation, stale snapshot rejection, and the guided web demo. The actual Uvicorn process also passed a `/v1/health` request locally. `DESIGN.md` contains the architecture diagram, sequence diagram, failure-mode table, and trade-offs.
+All **14 tests pass** locally. They cover concurrent versions, rollback before transaction commit, invalid rows, same-version conflicts, tenant isolation, role checks, snapshot approval audit, field ownership, booking cancellation, stale snapshot rejection, and the sample interface API flow. `api_demo.py` also exercises relay failure and retry. [DESIGN.md](DESIGN.md) contains the architecture diagram, sequence diagram, failure-mode table, and trade-offs.
 
 GitHub Actions runs the tests, the API walkthrough, bytecode compilation, and a Docker Compose health check on each push.
+
+The optional operator interface at `http://localhost:8000/` uses fictional records in an isolated sample tenant. A [product walkthrough](assets/demo.mp4), [short tour](assets/quick-tour.mp4), and [live demonstration steps](DEMO_WALKTHROUGH.md) are included for review.
 
 Configuration:
 
@@ -146,7 +127,7 @@ The HMAC token issuer supports the local deployment. A production boundary needs
 
 ## Repository
 
-Source and revision history: [arnavnaik22/HR-Roster-Sync](https://github.com/arnavnaik22/HR-Roster-Sync). The included CSV and workspace use synthetic data. Keep employee records and local `.env` files out of the repository.
+Source and revision history: [arnavnaik22/HR-Roster-Sync](https://github.com/arnavnaik22/HR-Roster-Sync). The included CSV and workspace use fictional records.
 
 ## References
 
