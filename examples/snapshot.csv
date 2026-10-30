@@ -1,0 +1,3 @@
+employee_id,name,email,phone,manager,office_code,shift,source_version
+E1,Demo Employee,demo@example.invalid,+919999999999,M1,BLR,09:00,1
+E2,Second Employee,second@example.invalid,+919999999998,M1,BLR,18:00,1
