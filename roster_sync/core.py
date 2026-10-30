@@ -10,6 +10,8 @@ import re
 import sqlite3
 import time
 import uuid
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -41,11 +43,12 @@ CREATE TABLE IF NOT EXISTS sync_runs (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, snapshot_version INTEGER NOT NULL,
  status TEXT NOT NULL, total INTEGER NOT NULL DEFAULT 0,
  invalid INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0,
- applied INTEGER NOT NULL DEFAULT 0, started_at REAL NOT NULL);
+ applied INTEGER NOT NULL DEFAULT 0, started_at REAL NOT NULL,
+ approved_by TEXT, applied_at REAL);
 CREATE TABLE IF NOT EXISTS tenant_watermarks (
  tenant_id TEXT PRIMARY KEY, snapshot_version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snapshot_rows (
- run_id TEXT NOT NULL, employee_id TEXT NOT NULL, payload TEXT NOT NULL,
+ run_id TEXT NOT NULL, employee_id TEXT NOT NULL, row_number INTEGER NOT NULL, payload TEXT NOT NULL,
  PRIMARY KEY(run_id, employee_id));
 CREATE INDEX IF NOT EXISTS snapshot_run ON snapshot_rows(run_id);
 CREATE TABLE IF NOT EXISTS sync_errors (
@@ -102,14 +105,37 @@ class SyncResult:
 
 class RosterStore:
     def __init__(self, path: str | Path = "roster.db", missing_threshold: float = 0.30):
+        if not 0 < missing_threshold <= 1:
+            raise ValueError("missing_threshold must be in (0, 1]")
         self.path = str(path)
         self.missing_threshold = missing_threshold
+        self._office_cache: OrderedDict[tuple[str, str], float] = OrderedDict()
+        self._office_cache_lock = threading.Lock()
         with connect(self.path) as db:
             db.executescript(SCHEMA)
 
     def add_office(self, tenant: str, office: str) -> None:
         with connect(self.path) as db:
             db.execute("INSERT OR IGNORE INTO offices VALUES (?,?)", (tenant, office))
+        with self._office_cache_lock:
+            self._office_cache[(tenant, office)] = time.monotonic() + 5
+
+    def _office_known(self, db: sqlite3.Connection, tenant: str, office: str) -> bool:
+        key, now = (tenant, office), time.monotonic()
+        with self._office_cache_lock:
+            expiry = self._office_cache.get(key, 0)
+            if expiry > now:
+                self._office_cache.move_to_end(key)
+                return True
+            self._office_cache.pop(key, None)
+        exists = db.execute("SELECT 1 FROM offices WHERE tenant_id=? AND office_code=?", key).fetchone() is not None
+        if exists:
+            with self._office_cache_lock:
+                self._office_cache[key] = now + 5
+                self._office_cache.move_to_end(key)
+                if len(self._office_cache) > 4096:
+                    self._office_cache.popitem(last=False)
+        return exists
 
     def _validate(self, db: sqlite3.Connection, tenant: str, event: dict) -> dict:
         if not ID.fullmatch(str(event.get("employee_id", ""))):
@@ -134,7 +160,7 @@ class RosterStore:
                 raise RosterError("INVALID_EMAIL")
             if not PHONE.fullmatch(clean["phone"]):
                 raise RosterError("INVALID_PHONE")
-            if db.execute("SELECT 1 FROM offices WHERE tenant_id=? AND office_code=?", (tenant, clean["office_code"])).fetchone() is None:
+            if not self._office_known(db, tenant, clean["office_code"]):
                 raise RosterError("UNKNOWN_OFFICE")
         return clean
 
@@ -221,7 +247,7 @@ class RosterStore:
                     clean = self._validate(db, tenant, event)
                     if clean["source_version"] > snapshot_version:
                         raise RosterError("FUTURE_ROW_VERSION")
-                    db.execute("INSERT INTO snapshot_rows VALUES (?,?,?)", (run_id, clean["employee_id"], canonical(clean)))
+                    db.execute("INSERT INTO snapshot_rows VALUES (?,?,?,?)", (run_id, clean["employee_id"], number, canonical(clean)))
                 except sqlite3.IntegrityError:
                     invalid += 1
                     db.execute("INSERT INTO sync_errors VALUES (?,?,?,?)", (run_id, number, str(raw.get("employee_id", "")), "DUPLICATE_ROW"))
@@ -240,7 +266,7 @@ class RosterStore:
             db.commit()
         return SyncResult(run_id, status, total, invalid, missing, 0)
 
-    def apply_snapshot(self, tenant: str, run_id: str, approved: bool = False) -> SyncResult:
+    def apply_snapshot(self, tenant: str, run_id: str, approved: bool = False, approved_by: str | None = None) -> SyncResult:
         with connect(self.path) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -255,10 +281,16 @@ class RosterStore:
                 if run["status"] == "HELD" and not approved:
                     raise RosterError("APPROVAL_REQUIRED", 409)
                 applied = 0
-                for row in db.execute("SELECT payload FROM snapshot_rows WHERE run_id=? ORDER BY employee_id", (run_id,)):
-                    event = json.loads(row[0])
-                    if self._apply(db, tenant, event) == "APPLIED":
-                        applied += 1
+                apply_invalid = 0
+                for row in db.execute("SELECT employee_id,row_number,payload FROM snapshot_rows WHERE run_id=? ORDER BY employee_id", (run_id,)):
+                    event = json.loads(row["payload"])
+                    try:
+                        if self._apply(db, tenant, event) == "APPLIED":
+                            applied += 1
+                    except RosterError as exc:
+                        apply_invalid += 1
+                        db.execute("INSERT INTO sync_errors VALUES (?,?,?,?)",
+                                   (run_id, row["row_number"], row["employee_id"], exc.code))
                 # Recheck against current state in this write transaction; newer events win.
                 missing_cursor = db.execute("""SELECT e.employee_id FROM employees e
                     WHERE e.tenant_id=? AND e.active=1 AND e.source_version<=?
@@ -272,12 +304,14 @@ class RosterStore:
                             continue
                         if self._apply(db, tenant, {"employee_id": row[0], "type": "DEACTIVATE", "source_version": run["snapshot_version"]}) == "APPLIED":
                             applied += 1
-                db.execute("UPDATE sync_runs SET status='APPLIED',applied=? WHERE id=?", (applied, run_id))
+                invalid_total = run["invalid"] + apply_invalid
+                db.execute("UPDATE sync_runs SET status='APPLIED',applied=?,invalid=?,approved_by=?,applied_at=? WHERE id=?",
+                           (applied, invalid_total, approved_by if approved else None, time.time(), run_id))
                 db.execute("INSERT INTO tenant_watermarks VALUES (?,?) ON CONFLICT(tenant_id) DO UPDATE SET snapshot_version=excluded.snapshot_version",
                            (tenant, run["snapshot_version"]))
                 db.execute("DELETE FROM snapshot_rows WHERE run_id=?", (run_id,))
                 db.commit()
-                return SyncResult(run_id, "APPLIED", run["total"], run["invalid"], run["missing"], applied)
+                return SyncResult(run_id, "APPLIED", run["total"], invalid_total, run["missing"], applied)
             except BaseException:
                 db.rollback()
                 raise
@@ -293,6 +327,22 @@ class RosterStore:
             if not db.execute("SELECT 1 FROM sync_runs WHERE id=? AND tenant_id=?", (run_id, tenant)).fetchone():
                 raise RosterError("UNKNOWN_RUN", 404)
             return [dict(r) for r in db.execute("SELECT row_number,employee_id,code FROM sync_errors WHERE run_id=?", (run_id,))]
+
+    def run(self, tenant: str, run_id: str) -> dict:
+        with connect(self.path) as db:
+            row = db.execute("SELECT id,snapshot_version,status,total,invalid,missing,applied,approved_by,applied_at FROM sync_runs WHERE id=? AND tenant_id=?",
+                             (run_id, tenant)).fetchone()
+            if not row:
+                raise RosterError("UNKNOWN_RUN", 404)
+            return dict(row)
+
+    def metrics(self, tenant: str) -> dict:
+        with connect(self.path) as db:
+            pending = db.execute("SELECT COUNT(*),MIN(created_at) FROM outbox WHERE tenant_id=? AND published_at IS NULL", (tenant,)).fetchone()
+            held = db.execute("SELECT COUNT(*) FROM sync_runs WHERE tenant_id=? AND status='HELD'", (tenant,)).fetchone()[0]
+            invalid = db.execute("SELECT COALESCE(SUM(invalid),0) FROM sync_runs WHERE tenant_id=?", (tenant,)).fetchone()[0]
+            return {"outbox_pending": pending[0], "outbox_oldest_age_seconds": round(time.time() - pending[1], 3) if pending[1] else 0,
+                    "held_runs": held, "invalid_rows_total": invalid}
 
     def pending_count(self, tenant: str) -> int:
         with connect(self.path) as db:

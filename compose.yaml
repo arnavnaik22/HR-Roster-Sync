@@ -7,6 +7,7 @@ services:
       ROSTER_DB: /data/roster.db
       ROSTER_SECRET: ${ROSTER_SECRET:-development-only-secret-please-change-12345}
       ROSTER_EVENT_URL: ${ROSTER_EVENT_URL:-}
+      ROSTER_MISSING_THRESHOLD: ${ROSTER_MISSING_THRESHOLD:-0.30}
     volumes:
       - roster-data:/data
 volumes:

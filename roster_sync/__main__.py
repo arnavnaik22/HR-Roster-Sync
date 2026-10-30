@@ -7,6 +7,6 @@ if __name__ == "__main__":
         secret = os.environ.get("ROSTER_SECRET", "")
         if len(secret) < 32:
             raise SystemExit("Set ROSTER_SECRET to at least 32 characters")
-        print(issue_token(secret, sys.argv[2], sys.argv[3]))
+        print(issue_token(secret, sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else "demo-user"))
     else:
         serve()
