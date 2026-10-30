@@ -4,6 +4,8 @@ An HR export arrives with six names where there should be ten. Applying it blind
 
 This is a working implementation of MoveInSync SDE case study 5, built with **Python 3.12, FastAPI, and SQLite**. The backend also handles duplicate and late events, field ownership, tenant isolation, booking cancellation, and a transactional outbox. The web screen makes those rules easier to inspect; the core remains testable without a browser.
 
+For the full submission narrative, read the [case study PDF](CASE_STUDY.pdf) or its [editable Markdown source](CASE_STUDY.md). It maps the brief to the implementation, test evidence, benchmark boundaries, design trade-offs, and a discussion-ready walkthrough.
+
 ## Start here
 
 The one-command application run is:
