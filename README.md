@@ -104,7 +104,7 @@ All **14 tests pass** locally. They cover concurrent versions, rollback before t
 
 GitHub Actions runs the tests, the API walkthrough, bytecode compilation, and a Docker Compose health check on each push.
 
-The optional operator interface at `http://localhost:8000/` uses fictional records in an isolated sample tenant. A [product walkthrough](assets/demo.mp4), [short tour](assets/quick-tour.mp4), and [live demonstration steps](DEMO_WALKTHROUGH.md) are included for review.
+The optional operator interface at `http://localhost:8000/` uses fictional records in an isolated sample tenant. A [live API recording](assets/live-api-demo.mp4) shows curl requests, event ordering, snapshot approval, and outbox retry. An [illustrated product walkthrough](assets/demo.mp4), [short tour](assets/quick-tour.mp4), and [live demonstration steps](DEMO_WALKTHROUGH.md) are also included.
 
 Configuration:
 
